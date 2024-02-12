@@ -1,6 +1,7 @@
 const csv = require('csv-parser')
 const fs = require('fs')
 const axios = require('axios').default;
+const util = require('util');
 
 const csvFilePath = process.argv[2];
 const endpoint = process.argv[3];
@@ -13,7 +14,7 @@ const IMAGE_SEPARATOR = '^';
 const PROCESS_COLUMN_SEPARATORS = [RELATION_SEPARATOR, IMAGE_SEPARATOR];
 const ARRAY_SEPARATOR = '; ';
 
-const ADMIN_BEARER_TOKEN = "847e745300668130a674f20e64e13ae4c63fb9d04c0871317b086cb8878d5c485ae61ecfd7ff68db783c335a743aeb6996ba3b6f5e03611fede85f248c13d0a955ab6ddae8dbfef98ca69e50d2736fb7aabe2531c1258503b0b314d7587721cc3fcf0ee5078279eb63e43957be545d4f85294c845a33e976045e5e0e69c2148e"
+const ADMIN_BEARER_TOKEN = "b44df3cb5b1a948651a722ce9e443864a8594c59ac1a2fedf9e2fa2baf19dbac4314bb3bdb91e6c63b83474bb0a9d7ef200548493d7dde429b2757642bbe4c0406ec6bf7c29ffba4182d3fff76f3d6f5929f9ebfca2860947c473e73060ed4b0c7c3f9c95d484f80612571064176ba3d4ca0dd088e276bc01ff53db38b1f9d08"
 
 const strapiInstance = axios.create({
   baseURL: 'http://localhost:1337/api',
@@ -22,6 +23,16 @@ const strapiInstance = axios.create({
     'Authorization': `Bearer ${ADMIN_BEARER_TOKEN}`
   }
 });
+strapiInstance.interceptors.request.use(
+  v => {
+    console.log('\x1b[31m', 'request', v.data)
+    return v
+  }
+)
+strapiInstance.interceptors.response.use(
+  (v) => v,
+  (c) => console.log(c.response?.data),
+)
 
 
 const relationData = {};
@@ -42,9 +53,14 @@ const getJsonFromCSV = async (csvPath) => {
       switch(true) {
         case checkIsRelationField(csvColumnName):
           const relationArray = row[pureCsvColumnName];
-          promises.push(getRelationCellValue(csvColumnName, relationArray).then(data => {
-            jsonData[jsonPropName] = data;
-          }));
+          if (relationArray == undefined || relationArray === '') {
+            break
+          }
+          promises.push(
+            getRelationCellValue(csvColumnName, relationArray).then(data => {
+              jsonData[jsonPropName] = data;
+            })
+          );            
           break;
         case checkIsImageField(csvColumnName):
           const imgUrl = row[pureCsvColumnName];
@@ -53,7 +69,7 @@ const getJsonFromCSV = async (csvPath) => {
           }));
           break;
         default:
-          jsonData[jsonPropName] = row[pureCsvColumnName];
+          jsonData[jsonPropName] = handleValue(row[pureCsvColumnName]);
       }
     }
 
@@ -68,11 +84,14 @@ const getJsonFromCSV = async (csvPath) => {
 const main = async () => {
   const posts = await getJsonFromCSV(csvFilePath);
 
-  const res = await Promise.all(posts.slice(0, 5)
-    .map(entry => strapiInstance.post(endpoint, entry)));
-  
+  console.log(util.inspect(posts, { showHidden: false, depth: null }));
+
+  const res = await Promise.all(posts.map(
+    entry => strapiInstance.post(endpoint, entry)
+  ));
+
   console.log(`All ${endpoint} created`);
-  console.log(res.map(r => r.data));
+  console.log(res.map(r => r.data.data.attributes));
 }
 
 // start the script
@@ -80,10 +99,10 @@ main();
 
 // some helper functions
 async function fetchRelationData(endpointName) {
-  return (await fetchStrapiApi(endpointName)).json().data;
+  return (await strapiInstance.get(endpointName)).data;
 }
 
-async function findRelationId(endpointName, propName, value) {
+function findRelationId(endpointName, propName, value) {
   return relationData[endpointName]
     .find(d => d.attributes[propName] === value).id
 }
@@ -112,25 +131,22 @@ function getProcessPropertiesMatching() {
 
 async function getRelationCellValue(csvColumnName, csvItemData) {
   const [endpointName, propName] = extractRelationEndpointAndPropName(csvColumnName);
-  const cellData = separateArrayValues(csvItemData[csvColumnName]);
+  const cellData = separateArrayValues(csvItemData);
   
   if (!relationData[endpointName]) {
-    await addRelationData(endpointName);
+    await addRelationData(endpointName, relationData);
   }
 
-  return {
-    // to set relations: https://docs.strapi.io/dev-docs/api/rest/relations#set
-    set: cellData.map(value => findRelationId(
-      endpointName,
-      propName,
-      value,
-    ))
-  }
+  return cellData.map(value => findRelationId(
+    endpointName,
+    propName,
+    value,
+  ))
 }
 
 async function addRelationData(endpointName, relationData) {
   const fetchedRelationData = await fetchRelationData(endpointName);
-  relationData[endpointName] = fetchedRelationData;
+  relationData[endpointName] = fetchedRelationData.data;
 }
 
 function parseCsvToJson(csvPath) {
@@ -162,4 +178,8 @@ function downloadImageBlobByUrl(url) {
       const file = await res.blob();
       return {file, fileName: url.split('/').pop()}
     })
+}
+
+function handleValue(value) {
+  return value === undefined || value === '' ? null : value
 }
