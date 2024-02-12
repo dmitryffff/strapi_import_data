@@ -18,7 +18,7 @@ const ADMIN_BEARER_TOKEN = "847e745300668130a674f20e64e13ae4c63fb9d04c0871317b08
 const strapiInstance = axios.create({
   baseURL: 'http://localhost:1337/api',
   headers: {
-    // 'Content-Type': 'multipart/form-data',
+    'Content-Type': 'multipart/form-data',
     'Authorization': `Bearer ${ADMIN_BEARER_TOKEN}`
   }
 });
@@ -31,36 +31,36 @@ const getJsonFromCSV = async (csvPath) => {
 
   const csvData = await parseCsvToJson(csvPath);
 
-  csvData.forEach(row => {
+  await Promise.all(csvData.map(async (row) => {
     const jsonData = {};
-    // for media
     const jsonFormData = new FormData();
+    const promises = [];
 
-    getProcessPropertiesMatching()
-      .forEach(([jsonPropName, csvColumnName]) => {
-        const pureCsvColumnName = extractCsvColumnName(csvColumnName);
-        switch(true) {
-          case checkIsRelationField(csvColumnName):
-            const relationArray = row[pureCsvColumnName];
-            getRelationCellValue(csvColumnName, relationArray)
-              .then(data => jsonData[jsonPropName] = data);
-            break;
-          case checkIsImageField(csvColumnName):
-            const imgUrl = row[pureCsvColumnName];
-            console.log('\x1b[31m' + 'checkIsImageField', imgUrl);
-            downloadImageBlobByUrl(imgUrl).then(({file, fileName}) => {
-              // download a file while an entry creation: https://docs.strapi.io/dev-docs/plugins/upload#upload-files-at-entry-creation
-              jsonFormData.append(`files.${jsonPropName}`, file, fileName);
-            });
-            break;
-          default:
-            jsonData[jsonPropName] = row[pureCsvColumnName];
-        }
-      });
+    for (let [jsonPropName, csvColumnName] of getProcessPropertiesMatching()) {
+      const pureCsvColumnName = extractCsvColumnName(csvColumnName);
 
-      jsonFormData.append('data', JSON.stringify(jsonData));
+      switch(true) {
+        case checkIsRelationField(csvColumnName):
+          const relationArray = row[pureCsvColumnName];
+          promises.push(getRelationCellValue(csvColumnName, relationArray).then(data => {
+            jsonData[jsonPropName] = data;
+          }));
+          break;
+        case checkIsImageField(csvColumnName):
+          const imgUrl = row[pureCsvColumnName];
+          promises.push(downloadImageBlobByUrl(imgUrl).then(({ file, fileName }) => {
+            jsonFormData.append(`files.${jsonPropName}`, file, fileName);
+          }));
+          break;
+        default:
+          jsonData[jsonPropName] = row[pureCsvColumnName];
+      }
+    }
+
+    await Promise.all(promises);
+    jsonFormData.append('data', JSON.stringify(jsonData));
     res.push(jsonFormData);
-  });
+  }));
 
   return res;
 }
