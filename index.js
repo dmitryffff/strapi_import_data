@@ -2,17 +2,31 @@ const csv = require('csv-parser')
 const fs = require('fs')
 const axios = require('axios').default;
 const util = require('util');
+const { uuid } = require('uuidv4');
 const TurndownService = require('turndown')
 
 const csvFilePath = process.argv[2];
 const endpoint = process.argv[3];
 
+const COLOR = {
+  RED: '\x1b[31m',
+  GREEN: '\x1b[32m',
+  YELLOW: '\x1b[33m',
+  BLUE: '\x1b[34m',
+}
+
 const PROP_MATCHING_START_INDEX = 4;
 
 const PROP_MATCHING_SEPARATOR = '=';
+
 const RELATION_SEPARATOR = '*';
 const IMAGE_SEPARATOR = '^';
-const PROCESS_COLUMN_SEPARATORS = [RELATION_SEPARATOR, IMAGE_SEPARATOR];
+const MARKDOWN_SEPARATOR = '!';
+const PROCESS_COLUMN_SEPARATORS = [
+  RELATION_SEPARATOR,
+  IMAGE_SEPARATOR,
+    MARKDOWN_SEPARATOR,
+];
 const ARRAY_SEPARATOR = '; ';
 
 const ADMIN_BEARER_TOKEN = "ce0f22cb789641f486e45a5af1a7cbffa3ef6e55bf630e38e3eb0e5e4ec24876d870c1586fc2ce6f8a4b48fdd05e00eb05a63aada90ac7df233ded3c1de5f2c9b73b9a7a9afc78078e3c603fd66e93006ce906b6d565c8980ab33543d244d991f35347dfc737b471ebad5acf699f752f1ed13c8f42cf8b16c7c98b8d1ea1b3f8"
@@ -26,7 +40,7 @@ const strapiInstance = axios.create({
 });
 strapiInstance.interceptors.request.use(
   v => {
-    console.log('\x1b[31m', 'request', v.url, v.data)
+    console.log(COLOR.RED, 'request', v.url, v.data)
     return v
   }
 )
@@ -35,7 +49,7 @@ strapiInstance.interceptors.response.use(
   (c) => console.log(c.response?.data),
 )
 
-const turndownService = new TurndownService()
+const turndownService = new TurndownService({ headingStyle: "atx" })
 
 const relationData = {};
 
@@ -75,6 +89,9 @@ const getJsonFromCSV = async (csvPath) => {
             )
           ));
           break;
+        case checkIsMarkdownField(csvColumnName):
+          jsonData[jsonPropName] = turndownService.turndown(row[pureCsvColumnName]);
+          break;
         default:
           jsonData[jsonPropName] = handleValue(row[pureCsvColumnName]);
       }
@@ -93,7 +110,7 @@ const main = async () => {
 
   console.log(util.inspect(posts, { showHidden: false, depth: null }));
 
-  const res = await Promise.all(posts.slice(0, 10).map(
+  const res = await Promise.all(posts.slice(0, 2).map(
     entry => strapiInstance.post(endpoint, entry)
   ));
 
@@ -118,6 +135,10 @@ function findRelationId(endpointName, propName, value) {
 
 function checkIsRelationField(value) {
   return value.includes(RELATION_SEPARATOR);
+}
+
+function checkIsMarkdownField(value) {
+  return value.includes(MARKDOWN_SEPARATOR);
 }
 
 function extractRelationEndpointAndPropName(value) {
@@ -179,14 +200,14 @@ function downloadImageBlobByUrl(url) {
       const file = await res.blob();
       return {
         file,
-        fileName: getFileNameFromDateTimestamp(getFileExtensionFromUrl(url)),
+        fileName: getUniqueFileName(getFileExtensionFromUrl(url)),
       }
     })
 }
 
-function getFileNameFromDateTimestamp(ext) {
+function getUniqueFileName(ext) {
   const date = new Date();
-  return `${date.getTime()}.${ext}`;
+  return `${date.toUTCString()}_${uuid()}.${ext}`;
 }
 
 function getFileExtensionFromUrl(url) {
