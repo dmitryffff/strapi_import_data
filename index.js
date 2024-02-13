@@ -2,6 +2,7 @@ const csv = require('csv-parser')
 const fs = require('fs')
 const axios = require('axios').default;
 const util = require('util');
+const TurndownService = require('turndown')
 
 const csvFilePath = process.argv[2];
 const endpoint = process.argv[3];
@@ -14,7 +15,7 @@ const IMAGE_SEPARATOR = '^';
 const PROCESS_COLUMN_SEPARATORS = [RELATION_SEPARATOR, IMAGE_SEPARATOR];
 const ARRAY_SEPARATOR = '; ';
 
-const ADMIN_BEARER_TOKEN = "b44df3cb5b1a948651a722ce9e443864a8594c59ac1a2fedf9e2fa2baf19dbac4314bb3bdb91e6c63b83474bb0a9d7ef200548493d7dde429b2757642bbe4c0406ec6bf7c29ffba4182d3fff76f3d6f5929f9ebfca2860947c473e73060ed4b0c7c3f9c95d484f80612571064176ba3d4ca0dd088e276bc01ff53db38b1f9d08"
+const ADMIN_BEARER_TOKEN = "ce0f22cb789641f486e45a5af1a7cbffa3ef6e55bf630e38e3eb0e5e4ec24876d870c1586fc2ce6f8a4b48fdd05e00eb05a63aada90ac7df233ded3c1de5f2c9b73b9a7a9afc78078e3c603fd66e93006ce906b6d565c8980ab33543d244d991f35347dfc737b471ebad5acf699f752f1ed13c8f42cf8b16c7c98b8d1ea1b3f8"
 
 const strapiInstance = axios.create({
   baseURL: 'http://localhost:1337/api',
@@ -34,10 +35,13 @@ strapiInstance.interceptors.response.use(
   (c) => console.log(c.response?.data),
 )
 
+const turndownService = new TurndownService()
 
 const relationData = {};
 
 const getJsonFromCSV = async (csvPath) => {
+  await fillRelationData(getProcessPropertiesMatching());
+
   const res = [];
 
   const csvData = await parseCsvToJson(csvPath);
@@ -56,11 +60,10 @@ const getJsonFromCSV = async (csvPath) => {
           if (relationArray == undefined || relationArray === '') {
             break
           }
-          promises.push(
-            getRelationCellValue(csvColumnName, relationArray).then(data => {
-              jsonData[jsonPropName] = data;
-            })
-          );            
+          jsonData[jsonPropName] = getRelationCellValue(
+            csvColumnName,
+            relationArray,
+          )
           break;
         case checkIsImageField(csvColumnName):
           const imgUrl = row[pureCsvColumnName];
@@ -86,12 +89,12 @@ const main = async () => {
 
   console.log(util.inspect(posts, { showHidden: false, depth: null }));
 
-  const res = await Promise.all(posts.map(
+  const res = await Promise.all(posts.slice(20, 40).map(
     entry => strapiInstance.post(endpoint, entry)
   ));
 
   console.log(`All ${endpoint} created`);
-  console.log(res.map(r => r.data.data.attributes));
+  console.log(res.map(r => r?.data?.data?.attributes));
 }
 
 // start the script
@@ -99,13 +102,16 @@ main();
 
 // some helper functions
 async function fetchRelationData(endpointName) {
-  return (await strapiInstance.get(endpointName)).data;
+  const res = await strapiInstance.get(endpointName);
+  return res?.data
 }
 
 function findRelationId(endpointName, propName, value) {
+  console.log("\x1b[31m", relationData[endpointName])
   return relationData[endpointName]
-    .find(d => d.attributes[propName] === value).id
+    ?.find(d => d.attributes[propName] === value)?.id;
 }
+
 
 function checkIsRelationField(value) {
   return value.includes(RELATION_SEPARATOR);
@@ -129,24 +135,16 @@ function getProcessPropertiesMatching() {
     .map(arg => arg.split(PROP_MATCHING_SEPARATOR).map(i => i.trim()));
 }
 
-async function getRelationCellValue(csvColumnName, csvItemData) {
+function getRelationCellValue(csvColumnName, csvItemData) {
   const [endpointName, propName] = extractRelationEndpointAndPropName(csvColumnName);
   const cellData = separateArrayValues(csvItemData);
-  
-  if (!relationData[endpointName]) {
-    await addRelationData(endpointName, relationData);
-  }
 
+  
   return cellData.map(value => findRelationId(
     endpointName,
     propName,
     value,
-  ))
-}
-
-async function addRelationData(endpointName, relationData) {
-  const fetchedRelationData = await fetchRelationData(endpointName);
-  relationData[endpointName] = fetchedRelationData.data;
+  )).filter(v => v !== undefined)
 }
 
 function parseCsvToJson(csvPath) {
@@ -183,3 +181,17 @@ function downloadImageBlobByUrl(url) {
 function handleValue(value) {
   return value === undefined || value === '' ? null : value
 }
+
+async function fillRelationData(processPropsMatching) {
+  const relativeEndpoints = processPropsMatching
+    .map(p => p[1])
+    .filter(p => checkIsRelationField(p))
+    .map(p => extractRelationEndpointAndPropName(p)[0])
+  const endpointsWithoutDuplicates = [...(new Set(relativeEndpoints))]
+
+  const relationPromises = endpointsWithoutDuplicates.map(async (endpoint) => {
+    relationData[endpoint] = (await fetchRelationData(endpoint)).data;
+  });
+  await Promise.all(relationPromises);
+}
+
