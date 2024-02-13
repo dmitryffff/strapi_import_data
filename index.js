@@ -26,7 +26,7 @@ const strapiInstance = axios.create({
 });
 strapiInstance.interceptors.request.use(
   v => {
-    console.log('\x1b[31m', 'request', v.data)
+    console.log('\x1b[31m', 'request', v.url, v.data)
     return v
   }
 )
@@ -67,9 +67,13 @@ const getJsonFromCSV = async (csvPath) => {
           break;
         case checkIsImageField(csvColumnName):
           const imgUrl = row[pureCsvColumnName];
-          promises.push(downloadImageBlobByUrl(imgUrl).then(({ file, fileName }) => {
-            jsonFormData.append(`files.${jsonPropName}`, file, fileName);
-          }));
+          promises.push(downloadImageBlobByUrl(imgUrl).then(
+            ({ file, fileName }) => jsonFormData.append(
+              `files.${jsonPropName}`,
+              file,
+              fileName,
+            )
+          ));
           break;
         default:
           jsonData[jsonPropName] = handleValue(row[pureCsvColumnName]);
@@ -89,7 +93,7 @@ const main = async () => {
 
   console.log(util.inspect(posts, { showHidden: false, depth: null }));
 
-  const res = await Promise.all(posts.slice(20, 40).map(
+  const res = await Promise.all(posts.slice(0, 10).map(
     entry => strapiInstance.post(endpoint, entry)
   ));
 
@@ -107,7 +111,6 @@ async function fetchRelationData(endpointName) {
 }
 
 function findRelationId(endpointName, propName, value) {
-  console.log("\x1b[31m", relationData[endpointName])
   return relationData[endpointName]
     ?.find(d => d.attributes[propName] === value)?.id;
 }
@@ -174,8 +177,20 @@ function downloadImageBlobByUrl(url) {
   return fetch(url)
     .then(async (res) => {
       const file = await res.blob();
-      return {file, fileName: url.split('/').pop()}
+      return {
+        file,
+        fileName: getFileNameFromDateTimestamp(getFileExtensionFromUrl(url)),
+      }
     })
+}
+
+function getFileNameFromDateTimestamp(ext) {
+  const date = new Date();
+  return `${date.getTime()}.${ext}`;
+}
+
+function getFileExtensionFromUrl(url) {
+  return url.split('.').pop();
 }
 
 function handleValue(value) {
@@ -189,9 +204,9 @@ async function fillRelationData(processPropsMatching) {
     .map(p => extractRelationEndpointAndPropName(p)[0])
   const endpointsWithoutDuplicates = [...(new Set(relativeEndpoints))]
 
-  const relationPromises = endpointsWithoutDuplicates.map(async (endpoint) => {
-    relationData[endpoint] = (await fetchRelationData(endpoint)).data;
-  });
-  await Promise.all(relationPromises);
+  await Promise.all(endpointsWithoutDuplicates.map(async (endpoint) => {
+    const res = await fetchRelationData(endpoint);
+    relationData[endpoint] = res.data;
+  }));
 }
 
