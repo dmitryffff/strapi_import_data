@@ -110,7 +110,7 @@ const main = async () => {
 
   console.log(util.inspect(posts, { showHidden: false, depth: null }));
 
-  const res = await Promise.all(posts.slice(0, 2).map(
+  const res = await Promise.all(posts.map(
     entry => strapiInstance.post(endpoint, entry)
   ));
 
